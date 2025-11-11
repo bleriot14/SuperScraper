@@ -1,0 +1,93 @@
+@startuml
+
+class SuperScraper {
+    -logger: AppLogger
+    -taskManager: TaskManager
+    -dataManager: DataManager
+    -scrapers: Map<String, ScraperBase>
+
+    +configure(): void
+    +start(): void
+}
+
+class AppLogger {
+    +info(msg: String): void
+    +error(msg: String): void
+    +withComponent(name: String): AppLogger
+}
+
+class TaskRequest {
+    +id: String
+    +scraperId: String
+    +url: String
+}
+
+class TaskResult {
+    +requestId: String
+    +html: String
+    +success: bool
+    +errorMessage: String
+}
+
+class TaskManager {
+    -logger: AppLogger
+    -drivers: List<RemoteWebDriver>
+    -driverBusy: Map<RemoteWebDriver, bool>
+    -queue: Queue<TaskRequest>
+    -scrapers: Map<String, ScraperBase>
+
+    +registerScraper(scraper: ScraperBase): void
+    +submit(req: TaskRequest): void
+    -workerLoop(): void
+    -dispatchNext(): void
+}
+
+abstract class ScraperBase {
+    +id: String
+    -taskManager: TaskManager
+    -dataManager: DataManager
+    -logger: AppLogger
+
+    +start(): void
+    +queueUrl(url: String): void
+    +onTaskResult(res: TaskResult): void
+    #handlePage(res: TaskResult): void
+}
+
+class AmazonMenuBFSScraper extends ScraperBase {
+    -domainQueue: Queue<String>
+    -visited: Set<String>
+
+    +start(): void
+    #handlePage(res: TaskResult): void
+}
+
+class DataManager {
+    -logger: AppLogger
+    -sql: SqlClient
+    -neo4j: Neo4jClient
+
+    +saveCategory(...): void
+    +saveProduct(...): void
+    +saveRelation(...): void
+}
+
+SuperScraper --> AppLogger
+SuperScraper --> TaskManager
+SuperScraper --> DataManager
+SuperScraper --> ScraperBase
+
+TaskManager --> AppLogger
+TaskManager --> TaskRequest
+TaskManager --> TaskResult
+TaskManager "1" --> "many" ScraperBase : registerScraper
+
+ScraperBase --> TaskManager
+ScraperBase --> DataManager
+ScraperBase --> AppLogger
+
+AmazonMenuBFSScraper -up-|> ScraperBase
+
+DataManager --> AppLogger
+
+@enduml
