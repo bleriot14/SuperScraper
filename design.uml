@@ -1,93 +1,163 @@
 @startuml
+skinparam classAttributeIconSize 0
+
+' ================== CORE INFRA ==================
 
 class SuperScraper {
-    -logger: AppLogger
-    -taskManager: TaskManager
-    -dataManager: DataManager
-    -scrapers: Map<String, ScraperBase>
-
-    +configure(): void
-    +start(): void
+    - logger: AppLogger
+    - dataManager: DataManager
+    - taskManager: TaskManager
+    - missions: List<ScrapeMissionBase>
+    + configure(): void
+    + registerMission(m: ScrapeMissionBase): void
+    + startAll(): void
+    + shutdown(): void
 }
 
 class AppLogger {
-    +info(msg: String): void
-    +error(msg: String): void
-    +withComponent(name: String): AppLogger
-}
-
-class TaskRequest {
-    +id: String
-    +scraperId: String
-    +url: String
-}
-
-class TaskResult {
-    +requestId: String
-    +html: String
-    +success: bool
-    +errorMessage: String
-}
-
-class TaskManager {
-    -logger: AppLogger
-    -drivers: List<RemoteWebDriver>
-    -driverBusy: Map<RemoteWebDriver, bool>
-    -queue: Queue<TaskRequest>
-    -scrapers: Map<String, ScraperBase>
-
-    +registerScraper(scraper: ScraperBase): void
-    +submit(req: TaskRequest): void
-    -workerLoop(): void
-    -dispatchNext(): void
-}
-
-abstract class ScraperBase {
-    +id: String
-    -taskManager: TaskManager
-    -dataManager: DataManager
-    -logger: AppLogger
-
-    +start(): void
-    +queueUrl(url: String): void
-    +onTaskResult(res: TaskResult): void
-    #handlePage(res: TaskResult): void
-}
-
-class AmazonMenuBFSScraper extends ScraperBase {
-    -domainQueue: Queue<String>
-    -visited: Set<String>
-
-    +start(): void
-    #handlePage(res: TaskResult): void
+    + info(msg: String): void
+    + error(msg: String): void
+    + withComponent(name: String): AppLogger
 }
 
 class DataManager {
-    -logger: AppLogger
-    -sql: SqlClient
-    -neo4j: Neo4jClient
+    - logger: AppLogger
+    - sqlClient: SqlClient
+    - neo4jClient: Neo4jClient
+    + saveCategory(...): void
+    + saveProduct(...): void
+    + saveRelation(...): void
+}
 
-    +saveCategory(...): void
-    +saveProduct(...): void
-    +saveRelation(...): void
+class TaskRequest {
+    + id: String
+    + missionId: String
+    + url: String
+}
+
+class TaskResult {
+    + requestId: String
+    + missionId: String
+    + url: String
+    + html: String
+    + success: bool
+    + errorMessage: String
+}
+
+class TaskManager {
+    - logger: AppLogger
+    - gridUrl: String
+    - drivers: List<RemoteWebDriver>
+    - driverBusy: Map<RemoteWebDriver,bool>
+    - queue: Queue<TaskRequest>
+    - missionsById: Map<String,ScrapeMissionBase>
+    + registerMission(m: ScrapeMissionBase): void
+    + submit(req: TaskRequest): void
+    - workerLoop(): void
+    - dispatchNext(): void
+    - execute(req: TaskRequest, driver: RemoteWebDriver): void
+    - notifyMission(res: TaskResult): void
+}
+
+class RemoteWebDriver {
+    + sessionId: String
+    + get(url: String): void
+    + quit(): void
 }
 
 SuperScraper --> AppLogger
-SuperScraper --> TaskManager
 SuperScraper --> DataManager
-SuperScraper --> ScraperBase
-
-TaskManager --> AppLogger
-TaskManager --> TaskRequest
-TaskManager --> TaskResult
-TaskManager "1" --> "many" ScraperBase : registerScraper
-
-ScraperBase --> TaskManager
-ScraperBase --> DataManager
-ScraperBase --> AppLogger
-
-AmazonMenuBFSScraper -up-|> ScraperBase
+SuperScraper --> TaskManager
+SuperScraper --> ScrapeMissionBase : manages >
 
 DataManager --> AppLogger
+TaskManager --> AppLogger
+TaskManager --> RemoteWebDriver : uses
+TaskManager --> TaskRequest
+TaskManager --> TaskResult
+
+' ================== STRATEGY: TRAVERSAL ==================
+
+interface TraversalStrategy {
+    + addInitial(urls: List<String>): void
+    + addNew(urls: List<String>): void
+    + hasNext(): bool
+    + next(): String
+}
+
+class BFSTraversal implements TraversalStrategy {
+    - queue: Queue<String>
+    + addInitial(urls: List<String>): void
+    + addNew(urls: List<String>): void
+    + hasNext(): bool
+    + next(): String
+}
+
+class DFSTraversal implements TraversalStrategy {
+    - stack: Stack<String>
+    + addInitial(urls: List<String>): void
+    + addNew(urls: List<String>): void
+    + hasNext(): bool
+    + next(): String
+}
+
+TraversalStrategy <|.. BFSTraversal
+TraversalStrategy <|.. DFSTraversal
+
+' ================== SCRAPE MISSIONS ==================
+
+abstract class ScrapeMissionBase {
+    + id: String
+    - taskManager: TaskManager
+    - dataManager: DataManager
+    - logger: AppLogger
+    - traversal: TraversalStrategy
+    - visited: Set<String>
+    + start(): void
+    + onTaskResult(res: TaskResult): void
+    + enqueueUrl(url: String): void
+    # parseAndSchedule(res: TaskResult): void
+}
+
+ScrapeMissionBase --> TaskManager
+ScrapeMissionBase --> DataManager
+ScrapeMissionBase --> AppLogger
+ScrapeMissionBase --> TraversalStrategy
+
+' Push model: TaskManager -> Mission
+TaskManager "1" --> "many" ScrapeMissionBase : notifyMission(res) >
+
+class AmazonMenuTreeScraper extends ScrapeMissionBase {
+    - rootUrls: List<String>
+    # parseAndSchedule(res: TaskResult): void
+}
+
+class EbayMenuTreeScraper extends ScrapeMissionBase {
+    - rootUrls: List<String>
+    # parseAndSchedule(res: TaskResult): void
+}
+
+AmazonMenuTreeScraper -up-|> ScrapeMissionBase
+EbayMenuTreeScraper -up-|> ScrapeMissionBase
+
+' ================== CONVENIENCE PRESET MISSIONS ==================
+
+class AmazonMenuTreeBFSScraper extends AmazonMenuTreeScraper {
+    + AmazonMenuTreeBFSScraper(taskManager, dataManager, logger)
+    ' ctor: traversal = new BFSTraversal()
+}
+
+class EbayMenuTreeDFSScraper extends EbayMenuTreeScraper {
+    + EbayMenuTreeDFSScraper(taskManager, dataManager, logger)
+    ' ctor: traversal = new DFSTraversal()
+}
+
+AmazonMenuTreeBFSScraper -up-|> AmazonMenuTreeScraper
+EbayMenuTreeDFSScraper -up-|> EbayMenuTreeScraper
+
+' ================== MAIN USAGE (ÖRNEK AKIŞ, UML İLİŞKİSEL) ==================
+
+SuperScraper ..> AmazonMenuTreeBFSScraper : creates 2x
+SuperScraper ..> EbayMenuTreeDFSScraper : creates 1x
 
 @enduml
