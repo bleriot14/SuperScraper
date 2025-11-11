@@ -1,185 +1,205 @@
 
+```markdown
+# 🕷️ SuperScraper Framework
 
-````markdown
-# 🕸️ SuperScraper Framework
-
-A modular, object-oriented web-scraping framework designed for distributed crawling using **Selenium Grid**.  
-It provides a clean separation between scraping logic, task management, data persistence, and logging — all orchestrated by a single composition root.
-
----
-
-## 🚀 Overview
-
-SuperScraper coordinates multiple **Scraper** modules running on a Selenium Grid with multiple Chrome instances.  
-Each scraper defines *what* to crawl, while the **TaskManager** decides *how* and *when* to execute those requests.  
-Results are pushed back to the scrapers asynchronously, then persisted by the **DataManager**.
-
-The design follows several key **Gang of Four (GoF)** patterns to ensure scalability, clarity, and maintainability.
+A modular, multi-mission web-scraping framework built around **Selenium Grid**, **Task dispatching**, and **Strategy-based traversal** (BFS / DFS).  
+Designed for extensibility and long-running distributed scraping tasks.
 
 ---
 
-## 🧩 Core Architecture
+## 🧩 Core Idea
 
-### **1. SuperScraper**
-- Acts as the **composition root** and light **Facade**.
-- Initializes and wires:
-  - `AppLogger`
-  - `TaskManager`
-  - `DataManager`
-  - One or more `ScraperBase` implementations.
-- Starts and stops the entire system lifecycle.
+**SuperScraper** manages the overall scraping ecosystem:
 
-### **2. TaskManager**
-- Central orchestrator for scraping tasks.
-- Holds direct connections to the Selenium Grid (e.g., 3 Chrome nodes).
-- Maintains an internal queue of `TaskRequest` objects.
-- Assigns each request to an available driver.
-- Pushes back results (`TaskResult`) to the corresponding scraper once completed.
-- Implements an **Observer pattern** (push model) toward scrapers.
+- Multiple **Scrape Missions** (e.g. Amazon / eBay)
+- A shared **TaskManager** that distributes URL requests to Selenium Grid nodes
+- Pluggable **Traversal Strategies** (BFS, DFS, or custom)
+- Centralized **DataManager** (writes to SQL + Neo4j)
+- Unified **AppLogger** for contextual logging
 
-### **3. ScraperBase (Abstract Class)**
-- Defines the **Template Method** structure for all scrapers.
-- Handles task submission, result reception, and error routing.
-- Derived classes (e.g., `AmazonMenuBFSScraper`) override `handlePage()` to define specific logic.
-- Can enqueue multiple URLs concurrently to the `TaskManager`.
-
-### **4. DataManager**
-- Single entry point for persistence.
-- Supports multiple storage targets (e.g., SQL and Neo4j) — effectively a light **Strategy** layer.
-- Each scraper can write to one or more stores in parallel via `DataManager`.
-
-### **5. AppLogger**
-- Provides contextual logging across all modules.
-- Designed as a lightweight **Singleton** via dependency injection.
-- Offers simple methods: `info()`, `error()`, `withComponent()`.
+Missions only define *what to scrape* and *how to extract* data.  
+They never deal with Selenium directly — that’s handled by the TaskManager.
 
 ---
 
-## 🧠 Design Patterns Used
+## ⚙️ Architecture Overview
 
-| Pattern | Role in Architecture |
-|----------|----------------------|
-| **Observer** | TaskManager pushes results to Scrapers (`onTaskResult`) |
-| **Template Method** | ScraperBase defines workflow, subclasses override `handlePage()` |
-| **Dependency Injection** | SuperScraper wires and injects dependencies |
-| **Facade** | SuperScraper exposes a unified system interface |
-| **Strategy (light)** | DataManager writes to multiple storage types |
-| **Singleton (light)** | Shared AppLogger instance |
+```
 
----
+SuperScraper
+├── AppLogger          → Centralized contextual logging
+├── DataManager        → SQL + Neo4j data persistence
+├── TaskManager        → Manages Selenium Grid + task queue
+│     └── RemoteWebDrivers[3]
+├── ScrapeMissionBase  → Abstract mission class
+│     ├── TraversalStrategy (BFS / DFS)
+│     ├── AmazonMenuTreeScraper
+│     │      └── AmazonMenuTreeBFSScraper (preset)
+│     └── EbayMenuTreeScraper
+│            └── EbayMenuTreeDFSScraper (preset)
+└── main.py            → Composition root
 
-## 🔧 Example Flow
-
-```text
-[SuperScraper]
-    ↓ creates
-[TaskManager] — manages —> [3 Selenium Chrome Nodes]
-    ↑                       ↑
-registers                  executes
-[ScraperBase] <—— results —— [TaskManager]
-    ↓ writes
-[DataManager] → SQL / Neo4j
 ````
 
-1. **SuperScraper** bootstraps everything.
-2. **ScraperBase** submits multiple `TaskRequest`s.
-3. **TaskManager** distributes them to free Chrome drivers.
-4. When pages finish loading, **TaskManager** pushes back **TaskResult** objects to the scraper.
-5. The scraper processes the data and saves it via **DataManager**.
+---
+
+## 🧠 Key Design Principles
+
+| Concept | Pattern Used | Responsibility |
+|----------|---------------|----------------|
+| **SuperScraper** | *Facade / Composition Root* | Bootstraps system, wires components, runs missions |
+| **ScrapeMissionBase** | *Template Method* | Defines scraping workflow: start → parse → enqueue |
+| **TraversalStrategy** | *Strategy* | Controls traversal order (BFS, DFS, etc.) |
+| **TaskManager** | *Observer (push model)* | Dispatches URLs, notifies correct mission on completion |
+| **DataManager** | *Facade* | Abstracts multiple storage systems |
+| **AppLogger** | *Singleton (DI)* | Provides context-aware logging across components |
 
 ---
 
-## 📦 Example Classes
+## 🚀 Runtime Flow
+
+1. **Initialization**
+   - `SuperScraper` creates `Logger`, `DataManager`, `TaskManager`
+   - Connects to Selenium Grid (`http://localhost:4444/wd/hub`)
+   - Launches 3 Chrome sessions
+
+2. **Mission Registration**
+   ```python
+   amazon1 = AmazonMenuTreeBFSScraper(task_manager, data_manager, logger)
+   amazon2 = AmazonMenuTreeBFSScraper(task_manager, data_manager, logger)
+   ebay1   = EbayMenuTreeDFSScraper(task_manager, data_manager, logger)
+   scraper.registerMission(amazon1)
+   scraper.registerMission(amazon2)
+   scraper.registerMission(ebay1)
+````
+
+3. **Execution**
+
+   * `SuperScraper.startAll()` starts the TaskManager worker loop.
+   * Each mission’s `start()` submits root URLs to the TaskManager.
+   * TaskManager dispatches jobs to free Selenium drivers.
+   * On completion, it **pushes results back** to the relevant mission via `onTaskResult()`.
+
+4. **Processing**
+
+   * The mission parses the HTML, saves entities via `DataManager`, and enqueues new URLs via its traversal strategy.
+
+5. **Persistence**
+
+   * All extracted data is saved to both SQL and Neo4j (parallel writes).
+
+---
+
+## 🧱 Class Responsibilities
+
+### `ScrapeMissionBase`
+
+* Defines `start()`, `onTaskResult()`, `parseAndSchedule()`
+* Keeps:
+
+  * `visited` set
+  * `TraversalStrategy` instance (queue/stack)
+* Never directly uses Selenium; interacts through `TaskManager`.
+
+### `TraversalStrategy`
+
+* Abstract interface:
+
+  ```python
+  addInitial(urls)
+  addNew(urls)
+  hasNext()
+  next()
+  ```
+* Implementations:
+
+  * `BFSTraversal`: FIFO queue
+  * `DFSTraversal`: LIFO stack
+
+### `TaskManager`
+
+* Holds `drivers = [driver1, driver2, driver3]`
+* Round-robin or first-free assignment
+* After fetch:
+
+  * Builds `TaskResult`
+  * Calls `mission.onTaskResult(result)`
+
+### `DataManager`
+
+* Single interface for all persistence:
+
+  ```python
+  saveProduct(...)
+  saveCategory(...)
+  saveRelation(...)
+  ```
+* Handles SQL + Neo4j connections internally.
+
+### `AppLogger`
+
+* Provides:
+
+  ```python
+  logger.info("message")
+  logger.withComponent("TaskManager").error("failed to acquire driver")
+  ```
+
+---
+
+## 🧪 Example `main.py`
 
 ```python
-class SuperScraper:
-    def configure(self):
-        self.logger = AppLogger()
-        self.data_manager = DataManager(self.logger)
-        self.task_manager = TaskManager(self.logger, self.data_manager)
-        self.scrapers = {
-            "amazon_bfs": AmazonMenuBFSScraper(
-                "amazon_bfs", self.task_manager, self.data_manager, self.logger
-            )
-        }
+from core import SuperScraper, AmazonMenuTreeBFSScraper, EbayMenuTreeDFSScraper
 
-    def start(self):
-        for s in self.scrapers.values():
-            self.task_manager.register_scraper(s)
-            s.start()
+if __name__ == "__main__":
+    scraper = SuperScraper()
+    scraper.configure()
+
+    amazon1 = AmazonMenuTreeBFSScraper(scraper.taskManager, scraper.dataManager, scraper.logger)
+    amazon2 = AmazonMenuTreeBFSScraper(scraper.taskManager, scraper.dataManager, scraper.logger)
+    ebay1   = EbayMenuTreeDFSScraper(scraper.taskManager, scraper.dataManager, scraper.logger)
+
+    scraper.registerMission(amazon1)
+    scraper.registerMission(amazon2)
+    scraper.registerMission(ebay1)
+
+    scraper.startAll()
 ```
 
 ---
 
-## ⚙️ Tech Stack
+## 🧭 Extending the Framework
 
-* **Language:** Python / C++ / C# adaptable architecture
-* **Web Automation:** Selenium Grid
-* **Persistence:** SQL, Neo4j
-* **Logging:** Contextual AppLogger
-* **Concurrency:** Internal async/threads (configurable)
-
----
-
-## 🧪 Example Scraper
-
-```python
-class AmazonMenuBFSScraper(ScraperBase):
-    def start(self):
-        self.queue_url("https://www.amazon.com/menu")
-
-    def handle_page(self, result):
-        links = extract_links(result.html)
-        for url in links:
-            if url not in self.visited:
-                self.visited.add(url)
-                self.queue_url(url)
-                self.data_manager.save_category(url)
-```
+| Goal                   | What to Implement                          |
+| ---------------------- | ------------------------------------------ |
+| Add a new site         | Create new subclass of `ScrapeMissionBase` |
+| Change traversal order | Plug in different `TraversalStrategy`      |
+| Support another DB     | Extend `DataManager` methods               |
+| Add logging filters    | Modify `AppLogger.withComponent()`         |
+| Scale driver count     | Adjust `TaskManager.drivers` init logic    |
 
 ---
 
-## 🧱 Future Extensions
+## ⚡ Future Enhancements
 
-* Retry policies per scraper
-* Advanced driver health monitoring
-* REST API layer for external control
-* Configurable persistence strategies
-* Plugin loader for dynamic scraper modules
-
----
-
-## 🧭 Folder Structure (suggested)
-
-```
-super_scraper/
-│
-├── core/
-│   ├── task_manager.py
-│   ├── scraper_base.py
-│   ├── data_manager.py
-│   ├── logger.py
-│   └── super_scraper.py
-│
-├── scrapers/
-│   ├── amazon_bfs_scraper.py
-│
-└── README.md
-```
+* [ ] Async / await driver dispatching
+* [ ] Distributed message queue (RabbitMQ / Redis)
+* [ ] Health monitor & retry system
+* [ ] Configurable retry policies per mission
+* [ ] Web dashboard for monitoring active missions
 
 ---
 
-## 🧑‍💻 Author
+## 🧑‍💻 Author Notes
 
-**Developed by:** Bleriot14
-**Purpose:** Modular, scalable scraper framework designed for distributed crawling via Selenium Grid.
+* Clean, extensible architecture — small classes, clear boundaries.
+* Strategy pattern ensures traversal logic can evolve without rewriting missions.
+* TaskManager remains driver-agnostic and reusable for any grid topology.
 
 ---
 
-## 🏁 License
-
-MIT License © 2025 Bleriot14
-
-```
+> “Don’t let scraping code rot into spaghetti.
+> Build it like a distributed system — even if it runs on your laptop.”
 
 ```
